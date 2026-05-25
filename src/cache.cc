@@ -239,7 +239,7 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
     sim_stats.total_miss_latency_cycles += (current_time - (fill_mshr.time_enqueued + clock_period)) / clock_period;
   sim_stats.mshr_return.increment(std::pair{fill_mshr.type, fill_mshr.cpu});
 
-  response_type response{fill_mshr.address, fill_mshr.v_address, fill_mshr.data_promise->data, metadata_thru, fill_mshr.instr_depend_on_me};
+  response_type response{fill_mshr.address, fill_mshr.v_address, fill_mshr.data_promise->data, metadata_thru, fill_mshr.instr_depend_on_me, OFFSET_BITS};
   for (auto* ret : fill_mshr.to_return) {
     ret->push_back(response);
   }
@@ -276,7 +276,7 @@ bool CACHE::try_hit(const tag_lookup_type& handle_pkt)
   if (hit) {
     sim_stats.hits.increment(std::pair{handle_pkt.type, handle_pkt.cpu});
 
-    response_type response{handle_pkt.address, handle_pkt.v_address, way->data, metadata_thru, handle_pkt.instr_depend_on_me};
+    response_type response{handle_pkt.address, handle_pkt.v_address, way->data, metadata_thru, handle_pkt.instr_depend_on_me, OFFSET_BITS};
     for (auto* ret : handle_pkt.to_return) {
       ret->push_back(response);
     }
@@ -609,27 +609,43 @@ bool CACHE::prefetch_line(uint64_t /*deprecated*/, uint64_t /*deprecated*/, uint
 
 void CACHE::finish_packet(const response_type& packet)
 {
-  // check MSHR information
-  auto mshr_entry = std::find_if(std::begin(MSHR), std::end(MSHR), matches_address(packet.address));
-  auto first_unreturned = std::find_if(MSHR.begin(), MSHR.end(), [](auto x) { return x.data_promise.has_unknown_readiness(); });
+  auto response_match_bits = packet.response_offset_bits == champsim::data::bits{} ? OFFSET_BITS : packet.response_offset_bits;
+  auto matches_response = [match = packet.address.slice_upper(response_match_bits), shamt = response_match_bits](const auto& entry) {
+    return entry.address.slice_upper(shamt) == match;
+  };
+
+  bool completed = false;
+  for (
+    auto first_unreturned = std::find_if(MSHR.begin(), MSHR.end(), [](auto x) { return x.data_promise.has_unknown_readiness(); });
+    first_unreturned != MSHR.end();
+    ++first_unreturned
+  ) {
+    
+    auto mshr_entry = std::find_if(first_unreturned, std::end(MSHR), matches_response);
+
+    if (mshr_entry == MSHR.end()) {
+      break;
+    }
+
+    // MSHR holds the most updated information about this request
+    mshr_type::returned_value finished_value{packet.data, packet.pf_metadata};
+    mshr_entry->data_promise = champsim::waitable{finished_value, current_time + (warmup ? champsim::chrono::clock::duration{} : FILL_LATENCY)};
+    if constexpr (champsim::debug_print) {
+      fmt::print("[{}_MSHR] finish_packet instr_id: {} address: {} data: {} type: {} current: {}\n", this->NAME, mshr_entry->instr_id, mshr_entry->address,
+                 mshr_entry->data_promise->data, access_type_names.at(champsim::to_underlying(mshr_entry->type)), current_time.time_since_epoch() / clock_period);
+    }
+
+    // Order this entry after previously-returned entries, but before non-returned
+    // entries
+    std::iter_swap(mshr_entry, first_unreturned);
+    completed = true;
+  }
 
   // sanity check
-  if (mshr_entry == MSHR.end()) {
+  if (!completed) {
     fmt::print(stderr, "[{}_MSHR] {} cannot find a matching entry! address: {} v_address: {}\n", NAME, __func__, packet.address, packet.v_address);
     assert(0);
   }
-
-  // MSHR holds the most updated information about this request
-  mshr_type::returned_value finished_value{packet.data, packet.pf_metadata};
-  mshr_entry->data_promise = champsim::waitable{finished_value, current_time + (warmup ? champsim::chrono::clock::duration{} : FILL_LATENCY)};
-  if constexpr (champsim::debug_print) {
-    fmt::print("[{}_MSHR] finish_packet instr_id: {} address: {} data: {} type: {} current: {}\n", this->NAME, mshr_entry->instr_id, mshr_entry->address,
-               mshr_entry->data_promise->data, access_type_names.at(champsim::to_underlying(mshr_entry->type)), current_time.time_since_epoch() / clock_period);
-  }
-
-  // Order this entry after previously-returned entries, but before non-returned
-  // entries
-  std::iter_swap(mshr_entry, first_unreturned);
 }
 
 void CACHE::finish_translation(const response_type& packet)

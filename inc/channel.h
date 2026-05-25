@@ -75,12 +75,14 @@ class channel
     champsim::address data{};
     uint32_t pf_metadata = 0;
     std::vector<uint64_t> instr_depend_on_me{};
+    champsim::data::bits response_offset_bits{};
 
-    response(champsim::address addr, champsim::address v_addr, champsim::address data_, uint32_t pf_meta, std::vector<uint64_t> deps)
-        : address(addr), v_address(v_addr), data(data_), pf_metadata(pf_meta), instr_depend_on_me(deps)
+    response(champsim::address addr, champsim::address v_addr, champsim::address data_, uint32_t pf_meta, std::vector<uint64_t> deps,
+             champsim::data::bits resp_offset_bits = {})
+        : address(addr), v_address(v_addr), data(data_), pf_metadata(pf_meta), instr_depend_on_me(deps), response_offset_bits(resp_offset_bits)
     {
     }
-    explicit response(request req) : response(req.address, req.v_address, req.data, req.pf_metadata, req.instr_depend_on_me) {}
+    explicit response(request req, champsim::data::bits resp_offset_bits = {}) : response(req.address, req.v_address, req.data, req.pf_metadata, req.instr_depend_on_me, resp_offset_bits) {}
   };
 
   template <typename R>
