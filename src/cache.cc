@@ -643,6 +643,19 @@ void CACHE::finish_packet(const response_type& packet)
 
   // sanity check
   if (!completed) {
+    auto packet_line_matches = matches_address(packet.address);
+    auto [set_begin, set_end] = get_set_span(packet.address);
+    auto block_already_filled = std::any_of(set_begin, set_end, [&](const auto& entry) { return entry.valid && packet_line_matches(entry); });
+    auto mshr_already_returned = std::any_of(std::begin(MSHR), std::end(MSHR),
+                                             [&](const auto& entry) { return !entry.data_promise.has_unknown_readiness() && packet_line_matches(entry); });
+
+    if (mshr_already_returned || block_already_filled) {
+      if constexpr (champsim::debug_print) {
+        fmt::print("[{}_MSHR] {} dropping stale response address: {} v_address: {}\n", NAME, __func__, packet.address, packet.v_address);
+      }
+      return;
+    }
+
     fmt::print(stderr, "[{}_MSHR] {} cannot find a matching entry! address: {} v_address: {}\n", NAME, __func__, packet.address, packet.v_address);
     assert(0);
   }
